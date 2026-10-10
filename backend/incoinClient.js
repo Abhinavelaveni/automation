@@ -169,11 +169,7 @@ async function checkAppUpdate() {
 async function fetchCaptcha() {
   try {
     const resp = await fetch(`${BASE_URL}/anon/test/getCaptcha`, {
-<<<<<<< HEAD
       signal: AbortSignal.timeout(Number(process.env.CAPTCHA_TIMEOUT_MS) || 20000),
-=======
-      signal: AbortSignal.timeout(TIMEOUT_MS),
->>>>>>> 6cd84533374874f14d8d61edb5b0ead7d1447b1c
     });
     const token =
       resp.headers.get('captchaToken') ||

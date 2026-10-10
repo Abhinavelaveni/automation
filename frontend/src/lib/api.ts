@@ -16,8 +16,6 @@ const BASE = '/api';
 const kServerUnavailableMessage =
   'Server not available. Please check your connection and try again.';
 
-<<<<<<< HEAD
-=======
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = '';
@@ -28,7 +26,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
->>>>>>> 6cd84533374874f14d8d61edb5b0ead7d1447b1c
 async function fetchIncoinAppKeys(): Promise<{ key: string; secret: string }> {
   const response = await fetch('https://api.incoinpay.net/anon/client/checkVersion', {
     headers: {
@@ -62,8 +59,6 @@ async function fetchIncoinAppKeys(): Promise<{ key: string; secret: string }> {
   return { key: keys.clientKey, secret: keys.clientSecret };
 }
 
-<<<<<<< HEAD
-=======
 async function signIncoinRequest(
   body: Record<string, string>,
   headerParams: Record<string, string>,
@@ -86,7 +81,6 @@ async function signIncoinRequest(
   return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
->>>>>>> 6cd84533374874f14d8d61edb5b0ead7d1447b1c
 function friendlyError(error: unknown): string {
   console.error('API error:', error);
   if (error instanceof TypeError) return kServerUnavailableMessage;
@@ -336,8 +330,6 @@ export const api = {
   }): Promise<ConnectResult> {
     try {
       const provider = input.provider || getActiveProvider() || 'incoin';
-<<<<<<< HEAD
-=======
       if (provider === 'incoin') {
         const keys = await fetchIncoinAppKeys();
         const timestamp = String(Date.now());
@@ -389,7 +381,6 @@ export const api = {
           body: JSON.stringify({ username: input.username, provider, incoinToken }),
         });
       }
->>>>>>> 6cd84533374874f14d8d61edb5b0ead7d1447b1c
       return await request<ConnectResult>('/incoin/connect', {
         method: 'POST',
         body: JSON.stringify({ ...input, provider }),
