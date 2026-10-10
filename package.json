@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "description": "Incoin Auto Tool - full-stack app (React frontend + Express/Mongo backend)",
   "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
   "scripts": {
-    "build": "npm install --prefix frontend && npm run --prefix frontend build && npm install --prefix backend --omit=dev",
+    "build": "npm run build --workspace frontend",
     "start": "node backend/server.js"
   }
 }
