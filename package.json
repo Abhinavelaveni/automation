@@ -6,8 +6,5 @@
   "scripts": {
     "build": "npm install --prefix frontend && npm run --prefix frontend build && npm install --prefix backend --omit=dev",
     "start": "node backend/server.js"
-  },
-  "dependencies": {
-    "all": "^0.0.0"
   }
 }
