@@ -7,7 +7,8 @@ const OS_VERSION = '30';
 const GAID = 'd802a45a-8b82-45a7-932f-abcdef123456';
 const ANDROID_ID = 'a1b2c3d4e5f6g7h8';
 const LANGUAGE = 'en';
-const BASE_URL = process.env.PAKKAGO_BASE_URL || 'https://api.pakkago.com';
+const BASE_URL = new URL(process.env.PAKKAGO_BASE_URL || 'https://api.pakkago.com').origin;
+const APP_KEYS_PATH = '/anon/client/checkVersion';
 
 const TIMEOUT_MS = 10000;
 const USER_AGENT = 'okhttp/4.12.0';
@@ -110,9 +111,10 @@ async function apiRequest(endpoint, bodyParams = {}, appKey, appSecret, token, m
 }
 
 async function fetchAppKeys() {
+  const requestUrl = `${BASE_URL}${APP_KEYS_PATH}`;
   let resp;
   try {
-    resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    resp = await fetch(requestUrl, {
       headers: baseHeaders(),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -122,7 +124,7 @@ async function fetchAppKeys() {
   }
 
   if (!resp.ok) {
-    throw new Error(`PakkaGo initialization request returned HTTP ${resp.status}.`);
+    throw new Error(`PakkaGo initialization request returned HTTP ${resp.status} from ${new URL(requestUrl).host}${APP_KEYS_PATH}.`);
   }
 
   let data;
