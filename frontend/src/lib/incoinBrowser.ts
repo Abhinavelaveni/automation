@@ -82,35 +82,79 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export async function fetchCaptcha(): Promise<{ captchaToken: string; imageBase64: string }> {
-  const resp = await fetch(`${BASE_URL}/anon/test/getCaptcha`, {
-    method: 'GET',
-    cache: 'no-store',
-  });
-  const token = readCaptchaToken(resp);
-  const blob = await resp.blob();
-  if (!resp.ok || !token || blob.size === 0) {
-    throw new Error('Could not load captcha. Check your connection.');
+  const url = `${BASE_URL}/anon/test/getCaptcha`;
+  console.log('[incoin] Fetching CAPTCHA from', url);
+
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+
+    console.log('[incoin] CAPTCHA response status:', resp.status);
+    console.log('[incoin] CAPTCHA response headers:', {
+      contentType: resp.headers.get('content-type'),
+      captchaTokenHeader: resp.headers.get('captchatoken') ? 'present' : 'missing',
+    });
+
+    const token = readCaptchaToken(resp);
+    console.log('[incoin] CAPTCHA token extracted:', token ? 'yes' : 'no');
+
+    const blob = await resp.blob();
+    console.log('[incoin] CAPTCHA image blob size:', blob.size, 'bytes');
+
+    if (!resp.ok) {
+      const detail = resp.status === 401 ? 'Unauthorized' : resp.status === 403 ? 'Forbidden (may be IP/geo restricted)' : `HTTP ${resp.status}`;
+      throw new Error(`CAPTCHA request failed: ${detail}`);
+    }
+
+    if (!token) {
+      throw new Error('CAPTCHA response did not include token header. Server may not expose required headers.');
+    }
+
+    if (blob.size === 0) {
+      throw new Error('CAPTCHA response was empty.');
+    }
+
+    const imageBase64 = await blobToBase64(blob);
+    console.log('[incoin] CAPTCHA loaded successfully, image size:', imageBase64.length, 'chars');
+
+    return { captchaToken: token, imageBase64 };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error('[incoin] CAPTCHA fetch failed:', errorMsg);
+    throw new Error(`Could not load CAPTCHA: ${errorMsg}`);
   }
-  return { captchaToken: token, imageBase64: await blobToBase64(blob) };
 }
 
 export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
+  const url = `${BASE_URL}/anon/client/checkVersion`;
+  console.log('[incoin] Fetching app keys from', url);
+
   let resp: Response;
   try {
-    resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    resp = await fetch(url, {
       method: 'GET',
       headers: baseHeaders(),
       cache: 'no-store',
     });
-  } catch {
+    console.log('[incoin] App keys response status:', resp.status);
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error('[incoin] App keys fetch network error:', errorMsg);
     throw new Error(
-      'Incoin initialization request could not reach api.incoinpay.net. Check your connection and browser cross-origin access.',
+      `Incoin initialization request could not reach api.incoinpay.net. Error: ${errorMsg}. Check your connection and browser cross-origin access.`,
     );
   }
 
   const responseText = await resp.text();
   const responseDetail = responseText.replace(/\s+/g, ' ').slice(0, 200);
+
   if (!resp.ok) {
+    console.error('[incoin] App keys response not OK', {
+      status: resp.status,
+      detail: responseDetail,
+    });
     const detail = responseDetail ? ` Response: ${responseDetail}` : '';
     throw new Error(
       `Incoin initialization request returned HTTP ${resp.status} from api.incoinpay.net/anon/client/checkVersion.${detail}`,
@@ -123,11 +167,19 @@ export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
   };
   try {
     data = JSON.parse(responseText);
-  } catch {
+    console.log('[incoin] App keys response parsed successfully');
+  } catch (err) {
+    console.error('[incoin] App keys response parse error:', err);
     throw new Error('Incoin initialization returned an invalid response.');
   }
 
   if (typeof data?.data?.clientKey !== 'string' || typeof data?.data?.clientSecret !== 'string') {
+    console.error('[incoin] App keys missing in response:', {
+      hasData: !!data?.data,
+      hasKey: typeof data?.data?.clientKey,
+      hasSecret: typeof data?.data?.clientSecret,
+      msg: data?.msg,
+    });
     throw new Error(
       typeof data?.msg === 'string'
         ? data.msg
@@ -135,6 +187,7 @@ export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
     );
   }
 
+  console.log('[incoin] App keys fetched successfully');
   return { key: data.data.clientKey, secret: data.data.clientSecret };
 }
 
@@ -147,6 +200,8 @@ export async function login(input: {
   captchaToken: string;
 }): Promise<{ success: true; token: string } | { success: false; error: string }> {
   try {
+    console.log('[incoin] Starting login flow for user:', input.username);
+
     const timestamp = String(Date.now());
     const body = {
       userName: input.username,
@@ -154,6 +209,13 @@ export async function login(input: {
       captcha: input.captchaCode,
       captchaToken: input.captchaToken,
     };
+
+    console.log('[incoin] Login request body prepared:', {
+      userName: body.userName,
+      captchaLength: body.captcha.length,
+      captchaTokenLength: body.captchaToken.length,
+    });
+
     const headerParams = {
       timestamp,
       version: APP_VERSION,
@@ -161,21 +223,50 @@ export async function login(input: {
       clientKey: input.appKey,
       clientType: CLIENT_TYPE,
     };
+
     const sign = await generateSign(body, headerParams, input.appSecret);
+    console.log('[incoin] HMAC signature generated:', sign.slice(0, 16) + '...');
+
     const headers = baseHeaders({ clientKey: input.appKey, sign, timestamp });
+    console.log('[incoin] Login request headers prepared');
+
+    console.log('[incoin] Sending login request to', `${BASE_URL}/anon/login`);
     const resp = await fetch(`${BASE_URL}/anon/login`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
     });
-    const data = await resp.json();
+
+    console.log('[incoin] Login response status:', resp.status);
+
+    let data: any;
+    const respText = await resp.text();
+    try {
+      data = JSON.parse(respText);
+    } catch {
+      console.error('[incoin] Login response parse error, raw text:', respText.slice(0, 200));
+      return { success: false, error: `Invalid response from server: ${respText.slice(0, 100)}` };
+    }
+
+    console.log('[incoin] Login response code:', data?.code, 'msg:', data?.msg);
+
     const code = data?.code;
     if (code === 0 || code === '0' || code === '000000') {
       const token = data?.data?.token;
-      if (token) return { success: true, token };
+      if (token) {
+        console.log('[incoin] Login successful, token received');
+        return { success: true, token };
+      }
+      console.error('[incoin] Login code success but no token in response');
+      return { success: false, error: 'Login succeeded but no token was returned.' };
     }
-    return { success: false, error: data?.msg || 'Login failed' };
+
+    const errorMsg = data?.msg || 'Login failed';
+    console.error('[incoin] Login failed with code', code, ':', errorMsg);
+    return { success: false, error: errorMsg };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error('[incoin] Login network error:', errorMsg);
+    return { success: false, error: `Network error: ${errorMsg}` };
   }
 }

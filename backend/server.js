@@ -42,7 +42,21 @@ const PORT = process.env.PORT || 5000;
 mongoose.set('strictQuery', true);
 
 app.disable('x-powered-by');
-app.use(cors({ origin: true, credentials: true }));
+
+// CORS configuration - expose custom headers needed by Incoin API
+app.use(cors({
+  origin: true,
+  credentials: true,
+  exposedHeaders: [
+    'captchaToken',
+    'captchatoken',
+    'CaptchaToken',
+    'x-request-id',
+    'x-ratelimit-limit',
+    'x-ratelimit-remaining',
+  ],
+}));
+
 app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');

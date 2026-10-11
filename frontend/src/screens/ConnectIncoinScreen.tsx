@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Info, Link2, Loader2, Lock, RefreshCw, Shield, UserPlus } from 'lucide-react';
+import { Info, Link2, Loader2, Lock, RefreshCw, Shield, UserPlus, AlertCircle } from 'lucide-react';
 import { AppHeader, BackButton, Page } from '@/components/layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -23,25 +23,51 @@ export default function ConnectIncoinScreen() {
   const [captchaToken, setCaptchaToken] = useState('');
   const [captchaLoading, setCaptchaLoading] = useState(true);
   const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [savedUsername, setSavedUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  const fetchCaptcha = useCallback(async () => {
+  const fetchCaptcha = useCallback(async (isRetry = false) => {
     setCaptchaLoading(true);
     setCaptchaError(null);
-    setCaptchaBase64(null);
-    setCaptcha('');
+    if (!isRetry) {
+      setCaptchaBase64(null);
+      setCaptcha('');
+    }
+
+    const maxRetries = 3;
+    const currentRetry = isRetry ? retryCount + 1 : 1;
+
+    console.log(`[ConnectIncoin] Fetching CAPTCHA (attempt ${currentRetry}/${maxRetries})`);
+
     try {
       const result = await api.fetchCaptcha(provider);
       setCaptchaBase64(`data:image/png;base64,${result.imageBase64}`);
       setCaptchaToken(result.captchaToken);
+      setRetryCount(0);
     } catch (err) {
-      setCaptchaError(err instanceof Error ? err.message : 'Could not load the verification image. Try again.');
+      const errorMsg = err instanceof Error ? err.message : 'Could not load the verification image.';
+
+      // Check for specific error types
+      if (errorMsg.includes('CAPTCHA token') || errorMsg.includes('token header')) {
+        console.error('[ConnectIncoin] CAPTCHA token header missing - possible CORS issue');
+      }
+
+      if (currentRetry < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, currentRetry - 1) * 1000;
+        console.log(`[ConnectIncoin] Retrying in ${delay}ms...`);
+        setTimeout(() => fetchCaptcha(true), delay);
+        return;
+      }
+
+      setRetryCount(0);
+      setCaptchaError(errorMsg);
     } finally {
       setCaptchaLoading(false);
     }
-  }, [provider]);
+  }, [provider, retryCount]);
 
   const loadState = useCallback(() => {
     api.getEngineState(provider).then((s) => {
@@ -65,8 +91,14 @@ export default function ConnectIncoinScreen() {
       showToast('Please enter the captcha code.');
       return;
     }
+    if (!captchaToken) {
+      showToast('CAPTCHA not loaded. Please wait or refresh.');
+      return;
+    }
     setLoading(true);
     setLoginError(null);
+    console.log('[ConnectIncoin] Submitting login for:', username.trim());
+
     const result = await api.connectIncoin({
       username: username.trim(),
       password,
@@ -74,12 +106,19 @@ export default function ConnectIncoinScreen() {
       captchaToken,
       provider,
     });
+
     setLoading(false);
+
     if (!result.success) {
-      setLoginError(result.error || 'Could not sign in to the service. Please check your credentials and try again.');
+      const errorMsg = result.error || 'Could not sign in. Please check credentials and try again.';
+      console.error('[ConnectIncoin] Login failed:', errorMsg);
+      setLoginError(errorMsg);
+      // Refresh CAPTCHA after failed login attempt
       fetchCaptcha();
       return;
     }
+
+    console.log('[ConnectIncoin] Login successful');
     showToast('Service account integrated successfully!', 'success');
     loadState();
     navigate('/dashboard');
@@ -134,9 +173,15 @@ export default function ConnectIncoinScreen() {
               <CardContent className="flex h-20 items-stretch p-0">
                 <div className="flex flex-1 items-center justify-center">
                   {captchaLoading ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <div className="flex flex-col items-center gap-1">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Loading...</span>
+                    </div>
                   ) : captchaError ? (
-                    <span className="px-3 text-center text-xs text-muted-foreground">{captchaError}</span>
+                    <div className="flex flex-col items-center gap-1 px-3 text-center">
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <span className="text-xs text-destructive">{captchaError}</span>
+                    </div>
                   ) : captchaBase64 ? (
                     <img src={captchaBase64} alt="Captcha" className="max-h-full max-w-full object-contain" />
                   ) : (
@@ -148,15 +193,21 @@ export default function ConnectIncoinScreen() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    onClick={fetchCaptcha}
+                    onClick={() => fetchCaptcha(true)}
                     disabled={captchaLoading}
                     aria-label="Refresh captcha"
+                    title="Refresh captcha"
                   >
                     {captchaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   </Button>
                 </div>
               </CardContent>
             </Card>
+            {captchaError && (
+              <p className="text-xs text-muted-foreground">
+                Having trouble? Check browser console (F12) for details, or try refreshing the page.
+              </p>
+            )}
           </div>
 
           <Field
