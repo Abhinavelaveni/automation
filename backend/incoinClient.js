@@ -16,6 +16,10 @@ const APP_KEYS_PATH = '/anon/client/checkVersion';
 const TIMEOUT_MS = 10000;
 const USER_AGENT = 'okhttp/4.12.0';
 
+function endpointUrl(path) {
+  return new URL(path, `${BASE_URL}/`).toString();
+}
+
 function generateSign(bodyParams, headerParams, appSecret) {
   const all = { ...bodyParams, ...headerParams };
   const entries = Object.entries(all);
@@ -84,7 +88,7 @@ async function apiRequest(endpoint, bodyParams = {}, appKey, appSecret, token, m
     'User-Agent': USER_AGENT,
   };
 
-  const url = `${BASE_URL}${endpoint}`;
+  const url = endpointUrl(endpoint);
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -116,7 +120,7 @@ async function apiRequest(endpoint, bodyParams = {}, appKey, appSecret, token, m
 
 // ── Step 1 — Fetch app keys ──────────────────────────────────
 async function fetchAppKeys() {
-  const requestUrl = `${BASE_URL}${APP_KEYS_PATH}`;
+  const requestUrl = endpointUrl(APP_KEYS_PATH);
   let resp;
   try {
     resp = await fetch(requestUrl, {
@@ -130,10 +134,15 @@ async function fetchAppKeys() {
 
   if (!resp.ok) {
     const finalUrl = new URL(resp.url || requestUrl);
-    const responseDetail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 200);
-    const detail = responseDetail ? ` Response: ${responseDetail}` : '';
+    console.error('[incoin] initialization request failed', {
+      method: 'GET',
+      host: finalUrl.host,
+      path: finalUrl.pathname,
+      status: resp.status,
+      contentType: resp.headers.get('content-type'),
+    });
     throw new Error(
-      `Incoin initialization request returned HTTP ${resp.status} from ${finalUrl.host}${finalUrl.pathname}.${detail}`,
+      `Incoin initialization request returned HTTP ${resp.status} from ${finalUrl.host}${finalUrl.pathname}.`,
     );
   }
 
@@ -157,7 +166,7 @@ async function fetchAppKeys() {
 
 async function checkAppUpdate() {
   try {
-    const resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    const resp = await fetch(endpointUrl(APP_KEYS_PATH), {
       headers: baseHeaders(),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -181,7 +190,7 @@ function readCaptchaToken(resp) {
 }
 
 async function fetchCaptchaOnce(headers) {
-  const resp = await fetch(`${BASE_URL}/anon/test/getCaptcha`, {
+  const resp = await fetch(endpointUrl('/anon/test/getCaptcha'), {
     method: 'GET',
     headers,
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -270,8 +279,6 @@ async function getUserProfile({ appKey, appSecret, token }) {
   // Try multiple possible field names for phone number
   const phone = res.data?.phone || res.data?.mobile || res.data?.phoneNumber ||
                 res.data?.mobileNumber || res.data?.contactNo || res.data?.contact || null;
-  console.log('[incoin] getUserProfile response:', JSON.stringify(res.data));
-  console.log('[incoin] Extracted phone:', phone);
   return { success: true, phone, data: res.data };
 }
 
@@ -332,7 +339,7 @@ function isRouteError(res) {
 
 async function discoverGrabDate() {
   try {
-    const resp = await fetch(`${BASE_URL}/v2/api-docs`, {
+    const resp = await fetch(endpointUrl('/v2/api-docs'), {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const docs = await resp.json();

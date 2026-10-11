@@ -5,7 +5,13 @@ const OS_VERSION = '30';
 const GAID = 'd802a45a-8b82-45a7-932f-abcdef123456';
 const ANDROID_ID = 'a1b2c3d4e5f6g7h8';
 const LANGUAGE = 'en';
-const BASE_URL = 'https://api.incoinpay.net';
+const BASE_URL = new URL(
+  import.meta.env.VITE_INCOIN_BASE_URL || 'https://api.incoinpay.net',
+).origin;
+
+function endpointUrl(path: string): string {
+  return new URL(path, `${BASE_URL}/`).toString();
+}
 
 async function hmacSha1Hex(secret: string, message: string): Promise<string> {
   const enc = new TextEncoder();
@@ -82,7 +88,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export async function fetchCaptcha(): Promise<{ captchaToken: string; imageBase64: string }> {
-  const url = `${BASE_URL}/anon/test/getCaptcha`;
+  const url = endpointUrl('/anon/test/getCaptcha');
   console.log('[incoin] Fetching CAPTCHA from', url);
 
   try {
@@ -128,7 +134,7 @@ export async function fetchCaptcha(): Promise<{ captchaToken: string; imageBase6
 }
 
 export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
-  const url = `${BASE_URL}/anon/client/checkVersion`;
+  const url = endpointUrl('/anon/client/checkVersion');
   console.log('[incoin] Fetching app keys from', url);
 
   let resp: Response;
@@ -148,16 +154,13 @@ export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
   }
 
   const responseText = await resp.text();
-  const responseDetail = responseText.replace(/\s+/g, ' ').slice(0, 200);
-
   if (!resp.ok) {
     console.error('[incoin] App keys response not OK', {
       status: resp.status,
-      detail: responseDetail,
+      contentType: resp.headers.get('content-type'),
     });
-    const detail = responseDetail ? ` Response: ${responseDetail}` : '';
     throw new Error(
-      `Incoin initialization request returned HTTP ${resp.status} from api.incoinpay.net/anon/client/checkVersion.${detail}`,
+      `Incoin initialization request returned HTTP ${resp.status} from ${new URL(resp.url || url).host}${new URL(resp.url || url).pathname}.`,
     );
   }
 
@@ -200,7 +203,7 @@ export async function login(input: {
   captchaToken: string;
 }): Promise<{ success: true; token: string } | { success: false; error: string }> {
   try {
-    console.log('[incoin] Starting login flow for user:', input.username);
+    console.log('[incoin] Starting login flow');
 
     const timestamp = String(Date.now());
     const body = {
@@ -211,7 +214,7 @@ export async function login(input: {
     };
 
     console.log('[incoin] Login request body prepared:', {
-      userName: body.userName,
+      hasUserName: !!body.userName,
       captchaLength: body.captcha.length,
       captchaTokenLength: body.captchaToken.length,
     });
@@ -244,8 +247,8 @@ export async function login(input: {
     try {
       data = JSON.parse(respText);
     } catch {
-      console.error('[incoin] Login response parse error, raw text:', respText.slice(0, 200));
-      return { success: false, error: `Invalid response from server: ${respText.slice(0, 100)}` };
+      console.error('[incoin] Login response was not valid JSON');
+      return { success: false, error: 'Invalid response from Incoin.' };
     }
 
     console.log('[incoin] Login response code:', data?.code, 'msg:', data?.msg);

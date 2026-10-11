@@ -97,7 +97,7 @@ export default function ConnectIncoinScreen() {
     }
     setLoading(true);
     setLoginError(null);
-    console.log('[ConnectIncoin] Submitting login for:', username.trim());
+    console.log('[ConnectIncoin] Submitting Incoin login');
 
     const result = await api.connectIncoin({
       username: username.trim(),
