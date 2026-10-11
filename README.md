@@ -1,15 +1,18 @@
 # Incoin Auto
 
-## Deploy on Render
+## Deploy on Railway
 
-This project is configured to deploy as a Render Node web service using [`render.yaml`](./render.yaml).
+This project is configured for Railway using [`railway.json`](./railway.json).
 
-1. Import the repository in Render and create the Blueprint service.
-2. Set `MONGODB_URI` to the MongoDB connection string in the Render service environment.
-3. Render generates `JWT_SECRET` automatically from the Blueprint configuration. Keep the existing secret when restoring an existing deployment so login tokens and encrypted service sessions continue to work.
+1. In Railway, create a project and deploy the `Abhinavelaveni/automation` GitHub repository from the `main` branch.
+2. Add these variables to the service:
+   - `MONGODB_URI`: MongoDB connection string.
+   - `JWT_SECRET`: a long, random secret. Keep it stable across deployments; changing it invalidates login tokens and encrypted service sessions.
+   - `INCOIN_BASE_URL`: `https://api.incoinpay.net` (optional; this is the default).
+3. Railway uses `npm run build` to build the frontend and `npm start` to start the backend. It checks `/health` after deployment.
 4. Deploy and verify `/health`, login, workspace connection, and task processing.
 
-The Blueprint builds with `npm run render-build` and starts with `npm start`.
+Referral image uploads are stored on the service filesystem. To preserve them across deploys and restarts, attach a Railway Volume mounted at `/app/backend/uploads`.
 
 ## Local development
 
