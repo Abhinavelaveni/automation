@@ -668,9 +668,14 @@ app.post('/api/incoin/connect', authMiddleware, async (req, res) => {
     if (authToken && typeof authToken === 'string') {
       loginResult = { success: true, token: authToken };
     } else {
-      const keys = await client.fetchAppKeys();
-      if (!keys) {
-        return res.json({ success: false, error: 'Service keys unavailable. Please try again.' });
+      let keys;
+      try {
+        keys = await client.fetchAppKeys();
+      } catch (err) {
+        return res.json({
+          success: false,
+          error: err instanceof Error ? err.message : 'Service keys unavailable. Please try again.',
+        });
       }
 
       loginResult = await client.login({

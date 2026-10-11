@@ -110,23 +110,37 @@ async function apiRequest(endpoint, bodyParams = {}, appKey, appSecret, token, m
 }
 
 async function fetchAppKeys() {
+  let resp;
   try {
-    const resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
       headers: baseHeaders(),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    const data = await resp.json();
-    if (data && data.data) {
-      return {
-        key: data.data.clientKey,
-        secret: data.data.clientSecret,
-        forcedUpgrade: Number(data.data.forcedUpgrade) === 1,
-      };
-    }
-  } catch {
-    return null;
+  } catch (err) {
+    const cause = err.cause?.code || err.message;
+    throw new Error(`PakkaGo initialization request failed: ${cause}`);
   }
-  return null;
+
+  if (!resp.ok) {
+    throw new Error(`PakkaGo initialization request returned HTTP ${resp.status}.`);
+  }
+
+  let data;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error('PakkaGo initialization returned an invalid response.');
+  }
+
+  if (!data?.data?.clientKey || !data?.data?.clientSecret) {
+    throw new Error('PakkaGo initialization response did not include service keys.');
+  }
+
+  return {
+    key: data.data.clientKey,
+    secret: data.data.clientSecret,
+    forcedUpgrade: Number(data.data.forcedUpgrade) === 1,
+  };
 }
 
 async function checkAppUpdate() {

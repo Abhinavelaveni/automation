@@ -76,10 +76,14 @@ class GrabEngine {
       logs.push('Initializing engine...');
       this._emit({ success: false, message: 'Starting...', status: 'Starting...', logs: [...logs], processed: 0, progress: 5 });
 
-      const keys = await this.client.fetchAppKeys();
-      if (!keys) {
-        this._emit({ success: false, message: 'Initialization failed. Check connection.', status: 'Initialization failed. Check connection.', logs, processed: 0, progress: 0 });
-        return { success: false, message: 'Initialization failed. Check connection.', logs, processed: 0 };
+      let keys;
+      try {
+        keys = await this.client.fetchAppKeys();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Service initialization failed.';
+        logs.push(message);
+        this._emit({ success: false, message, status: message, logs, processed: 0, progress: 0 });
+        return { success: false, message, logs, processed: 0 };
       }
       logs.push('Engine initialized.');
       this._emit({ success: false, message: 'Authenticating...', status: 'Authenticating...', logs: [...logs], processed: 0, progress: 10 });

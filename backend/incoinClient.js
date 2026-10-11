@@ -115,25 +115,37 @@ async function apiRequest(endpoint, bodyParams = {}, appKey, appSecret, token, m
 
 // ── Step 1 — Fetch app keys ──────────────────────────────────
 async function fetchAppKeys() {
+  let resp;
   try {
-    const resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
       headers: baseHeaders(),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    const data = await resp.json();
-    if (data && data.data) {
-      return {
-        key: data.data.clientKey,
-        secret: data.data.clientSecret,
-        forcedUpgrade: Number(data.data.forcedUpgrade) === 1,
-      };
-    }
-    console.warn(`[incoin] checkVersion unexpected payload (HTTP ${resp.status})`);
   } catch (err) {
-    console.warn(`[incoin] checkVersion failed: ${err.message}`);
-    return null;
+    const cause = err.cause?.code || err.message;
+    throw new Error(`Incoin initialization request failed: ${cause}`);
   }
-  return null;
+
+  if (!resp.ok) {
+    throw new Error(`Incoin initialization request returned HTTP ${resp.status}.`);
+  }
+
+  let data;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error('Incoin initialization returned an invalid response.');
+  }
+
+  if (!data?.data?.clientKey || !data?.data?.clientSecret) {
+    throw new Error('Incoin initialization response did not include service keys.');
+  }
+
+  return {
+    key: data.data.clientKey,
+    secret: data.data.clientSecret,
+    forcedUpgrade: Number(data.data.forcedUpgrade) === 1,
+  };
 }
 
 async function checkAppUpdate() {
