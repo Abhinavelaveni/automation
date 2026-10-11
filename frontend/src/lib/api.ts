@@ -247,6 +247,28 @@ export const api = {
   }): Promise<ConnectResult> {
     try {
       const provider = input.provider || getActiveProvider() || 'incoin';
+      if (provider === 'incoin') {
+        const keys = await incoinBrowser.fetchAppKeys();
+        const loginResult = await incoinBrowser.login({
+          appKey: keys.key,
+          appSecret: keys.secret,
+          username: input.username,
+          password: input.password,
+          captchaCode: input.captchaCode,
+          captchaToken: input.captchaToken,
+        });
+        if (!loginResult.success) {
+          return { success: false, error: loginResult.error };
+        }
+        return await request<ConnectResult>('/incoin/connect', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: input.username,
+            authToken: loginResult.token,
+            provider,
+          }),
+        });
+      }
       return await request<ConnectResult>('/incoin/connect', {
         method: 'POST',
         body: JSON.stringify({ ...input, provider }),
@@ -274,11 +296,15 @@ export const api = {
   }): Promise<{ success: boolean; runId?: string; taskLimit?: number; error?: string }> {
     try {
       const provider = getActiveProvider() || 'incoin';
+      const appKeys = provider === 'incoin'
+        ? await incoinBrowser.fetchAppKeys()
+        : null;
       return await request('/incoin/start', {
         method: 'POST',
         body: JSON.stringify({
           ...input,
           provider,
+          ...(appKeys && { appKeys }),
         }),
       });
     } catch (e) {
