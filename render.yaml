@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: incoin-auto
+    name: automation
     runtime: node
     region: oregon
     plan: free
@@ -20,4 +20,4 @@ services:
       - key: VITE_INCOIN_BASE_URL
         value: "https://api.incoinpay.net"
       - key: VITE_ENABLE_DEVTOOL
-        value: "true"
+        value: "false"
