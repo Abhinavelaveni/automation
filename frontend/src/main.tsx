@@ -4,7 +4,7 @@ import DisableDevtool from 'disable-devtool';
 import App from './App';
 import './styles/global.css';
 
-if (import.meta.env.VITE_ENABLE_DEVTOOL !== 'true') {
+if (import.meta.env.VITE_ENABLE_DEVTOOL !== 'false') {
   DisableDevtool({
     disableMenu: true,
     disableSelect: false,
