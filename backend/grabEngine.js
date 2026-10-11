@@ -30,18 +30,7 @@ const humanDelay = {
  *   { success, message, status, logs, processed, progress, processedTasks }
  */
 class GrabEngine {
-  constructor({
-    username,
-    token,
-    minAmount,
-    maxAmount,
-    targetCount,
-    preferredToolName,
-    provider,
-    onEvent,
-    resumeState = {},
-    sliceDurationMs = 40000,
-  }) {
+  constructor({ username, token, minAmount, maxAmount, targetCount, preferredToolName, provider, onEvent }) {
     this.username = username;
     this.token = token;
     this.minAmount = minAmount;
@@ -52,21 +41,14 @@ class GrabEngine {
     this.client = resolveClient(this.provider);
     this.onEvent = onEvent || (() => {});
     this.stopRequested = false;
-    this.pauseRequested = false;
     this.stopped = false;
-    this.resumeState = resumeState;
-    this.sliceDurationMs = sliceDurationMs;
   }
 
   stop() {
     this.stopRequested = true;
   }
 
-  pause() {
-    this.pauseRequested = true;
-  }
-
-  async _emit(partial) {
+  _emit(partial) {
     const event = {
       success: partial.success,
       message: partial.message,
@@ -75,31 +57,15 @@ class GrabEngine {
       processed: partial.processed,
       progress: partial.progress,
       processedTasks: partial.processedTasks || [],
-      state: this.stateSnapshot?.(),
     };
-    await this.onEvent(event);
+    this.onEvent(event);
   }
 
   async run() {
-    const logs = [...(this.resumeState.logs || [])];
-    const processedJobs = [...(this.resumeState.processedJobs || [])];
-    const permanentlyFailedIds = new Set(this.resumeState.permanentlyFailedIds || []);
-    let listErrorCount = this.resumeState.listErrorCount || 0;
-    let iteration = this.resumeState.iteration || 0;
+    const logs = [];
+    const processedJobs = [];
+    const permanentlyFailedIds = new Set();
     const effectiveMax = this.maxAmount === 0 ? Infinity : this.maxAmount;
-    const deadline = Date.now() + this.sliceDurationMs;
-    const pauseTimer = setTimeout(() => this.pause(), this.sliceDurationMs);
-    const processedTasks = () => processedJobs
-      .filter((job) => job.verified)
-      .map((job) => ({ taskId: job.id }));
-    const stateSnapshot = () => ({
-      logs,
-      processedJobs,
-      permanentlyFailedIds: [...permanentlyFailedIds],
-      listErrorCount,
-      iteration,
-    });
-    this.stateSnapshot = stateSnapshot;
 
     const rangeInfo = effectiveMax === Infinity
       ? `\u2265${Math.round(this.minAmount)}`
@@ -108,7 +74,7 @@ class GrabEngine {
     try {
       // ── Step 1: Fetch app keys ──────────────────────────────
       logs.push('Initializing engine...');
-      await this._emit({ success: false, message: 'Starting...', status: 'Starting...', logs: [...logs], processed: 0, progress: 5 });
+      this._emit({ success: false, message: 'Starting...', status: 'Starting...', logs: [...logs], processed: 0, progress: 5 });
 
       let keys;
       try {
@@ -116,39 +82,19 @@ class GrabEngine {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Service initialization failed.';
         logs.push(message);
-        await this._emit({ success: false, message, status: message, logs, processed: 0, progress: 0 });
-        clearTimeout(pauseTimer);
-        const tasks = processedTasks();
-        return {
-          success: tasks.length > 0,
-          failed: true,
-          message,
-          logs,
-          processed: tasks.length,
-          processedTasks: tasks,
-          state: stateSnapshot(),
-        };
+        this._emit({ success: false, message, status: message, logs, processed: 0, progress: 0 });
+        return { success: false, message, logs, processed: 0 };
       }
       logs.push('Engine initialized.');
-      await this._emit({ success: false, message: 'Authenticating...', status: 'Authenticating...', logs: [...logs], processed: 0, progress: 10 });
+      this._emit({ success: false, message: 'Authenticating...', status: 'Authenticating...', logs: [...logs], processed: 0, progress: 10 });
 
       // ── Step 2: Use saved session token ─────────────────────
       if (!this.token) {
-        await this._emit({ success: false, message: 'No active session. Please reconnect your service workspace.', status: 'No active session. Please reconnect your service workspace.', logs, processed: 0, progress: 0 });
-        clearTimeout(pauseTimer);
-        const tasks = processedTasks();
-        return {
-          success: tasks.length > 0,
-          failed: true,
-          message: 'No active session.',
-          logs,
-          processed: tasks.length,
-          processedTasks: tasks,
-          state: stateSnapshot(),
-        };
+        this._emit({ success: false, message: 'No active session. Please reconnect your service workspace.', status: 'No active session. Please reconnect your service workspace.', logs, processed: 0, progress: 0 });
+        return { success: false, message: 'No active session.', logs, processed: 0 };
       }
       logs.push('Using active session.');
-      await this._emit({ success: false, message: 'Preparing tasks...', status: 'Preparing tasks...', logs: [...logs], processed: 0, progress: 20 });
+      this._emit({ success: false, message: 'Preparing tasks...', status: 'Preparing tasks...', logs: [...logs], processed: 0, progress: 20 });
 
       // ── Step 3: Select payment tool ─────────────────────────
       logs.push('Configuring connectors...');
@@ -159,35 +105,21 @@ class GrabEngine {
         preferredToolName: this.preferredToolName,
       });
       if (!toolResult.tool) {
-        await this._emit({ success: false, message: toolResult.error || 'Connector configuration failed.', status: toolResult.error || 'Connector configuration failed.', logs, processed: 0, progress: 0 });
-        clearTimeout(pauseTimer);
-        const tasks = processedTasks();
-        return {
-          success: tasks.length > 0,
-          failed: true,
-          message: toolResult.error || 'Connector configuration failed.',
-          logs,
-          processed: tasks.length,
-          processedTasks: tasks,
-          state: stateSnapshot(),
-        };
+        this._emit({ success: false, message: toolResult.error || 'Connector configuration failed.', status: toolResult.error || 'Connector configuration failed.', logs, processed: 0, progress: 0 });
+        return { success: false, message: toolResult.error || 'Connector configuration failed.', logs, processed: 0 };
       }
       const selectedTool = toolResult.tool;
       logs.push(`Connector set: ${selectedTool.toolName}`);
-      await this._emit({ success: false, message: 'Scanning for tasks...', status: 'Scanning for tasks...', logs: [...logs], processed: 0, progress: 30 });
+      this._emit({ success: false, message: 'Scanning for tasks...', status: 'Scanning for tasks...', logs: [...logs], processed: 0, progress: 30 });
 
       // ── Step 4: FAST task processing ────────────────────────
       logs.push(`\u26a1 Fast-scan mode (Complexity ${this.minAmount} \u2013 ${effectiveMax === Infinity ? 'Any' : Math.round(effectiveMax)})`);
 
       let stopFlag = false;
+      let listErrorCount = 0;
+      let iteration = 0;
 
-      while (
-        processedJobs.length < this.targetCount
-        && !stopFlag
-        && !this.stopRequested
-        && !this.pauseRequested
-        && Date.now() < deadline
-      ) {
+      while (processedJobs.length < this.targetCount && !stopFlag && !this.stopRequested) {
         iteration++;
 
         const listResult = await this.client.fetchTaskList({
@@ -195,7 +127,6 @@ class GrabEngine {
           appSecret: keys.secret,
           token: this.token,
         });
-        if (this.pauseRequested && !this.stopRequested) break;
 
         const records = listResult.tasks;
 
@@ -207,7 +138,7 @@ class GrabEngine {
 
           if (listErrorCount % 10 === 1 || isRateLimited) {
             logs.push(`\u21bb API busy, retrying... (${errMsg})`);
-            await this._emit({
+            this._emit({
               success: false,
               message: `Scanning... (${processedJobs.length}/${this.targetCount})`,
               status: `Scanning... (${processedJobs.length}/${this.targetCount})`,
@@ -262,7 +193,7 @@ class GrabEngine {
               ? 'No tasks in queue yet'
               : `Found ${records.length} task(s), ${outOfRangeCount} out-of-range for ${rangeInfo}`;
             logs.push(`\u21bb ${detail}. Scanning...`);
-            await this._emit({
+            this._emit({
               success: false,
               message: `Scanning (${processedJobs.length}/${this.targetCount}) \u2013 ${detail}`,
               status: `Scanning (${processedJobs.length}/${this.targetCount}) \u2013 ${detail}`,
@@ -277,7 +208,7 @@ class GrabEngine {
 
         // ── GRAB: concurrent initialization + verification ──
         logs.push(`\u26a1 Found ${tasksToProcess.length} eligible action(s)! Grabbing...`);
-        await this._emit({
+        this._emit({
           success: false,
           message: `Grabbing ${tasksToProcess.length} task(s)...`,
           status: `Grabbing ${tasksToProcess.length} task(s)...`,
@@ -288,7 +219,6 @@ class GrabEngine {
 
         const results = [];
         for (let i = 0; i < tasksToProcess.length; i++) {
-          if (this.pauseRequested && !this.stopRequested) break;
           const item = tasksToProcess[i];
           const initRes = await this.client.initializeTask({
             taskId: item.id,
@@ -379,7 +309,7 @@ class GrabEngine {
 
         const successfulCount = processedJobs.filter((o) => o.verified).length;
         const progressPct = Math.min(100, 30 + (successfulCount / this.targetCount) * 70);
-        await this._emit({
+        this._emit({
           success: false,
           message: `Processing (${successfulCount}/${this.targetCount})...`,
           status: `Processing (${successfulCount}/${this.targetCount})...`,
@@ -393,33 +323,28 @@ class GrabEngine {
         await sleep(0);
       }
 
-      clearTimeout(pauseTimer);
       if (this.stopRequested) this.stopped = true;
-      const paused = this.pauseRequested && !this.stopRequested
-        && processedJobs.length < this.targetCount && !stopFlag;
 
       // ── Final result ──
-      const successfulTasks = processedTasks();
+      const successfulTasks = processedJobs
+        .filter((o) => o.verified)
+        .map((o) => ({ taskId: o.id }));
 
       const finalProcessedCount = successfulTasks.length;
       const msg =
-        paused
-          ? `Run paused. Continuing soon (${finalProcessedCount}/${this.targetCount}).`
-          : finalProcessedCount > 0
+        finalProcessedCount > 0
           ? `Done! Successfully processed ${finalProcessedCount}/${this.targetCount} actions.`
           : this.stopped
             ? 'Stopped by user.'
             : 'No actions were processed at this time.';
 
-      await this._emit({
+      this._emit({
         success: finalProcessedCount > 0,
         message: msg,
         status: msg,
         logs,
         processed: finalProcessedCount,
-        progress: paused
-          ? Math.min(99, 30 + (finalProcessedCount / this.targetCount) * 70)
-          : 100,
+        progress: 100,
         processedTasks: successfulTasks,
       });
 
@@ -429,14 +354,10 @@ class GrabEngine {
         logs,
         processed: finalProcessedCount,
         processedTasks: successfulTasks,
-        paused,
-        stopped: this.stopped,
-        state: stateSnapshot(),
       };
     } catch (err) {
-      clearTimeout(pauseTimer);
       logs.push(`Technical error: ${err.message}`);
-      await this._emit({
+      this._emit({
         success: false,
         message: 'Process interrupted.',
         status: 'Process interrupted.',
@@ -444,16 +365,7 @@ class GrabEngine {
         processed: 0,
         progress: 0,
       });
-      const tasks = processedTasks();
-      return {
-        success: false,
-        failed: true,
-        message: 'Process interrupted.',
-        logs,
-        processed: tasks.length,
-        processedTasks: tasks,
-        state: stateSnapshot(),
-      };
+      return { success: false, message: 'Process interrupted.', logs, processed: 0 };
     }
   }
 }

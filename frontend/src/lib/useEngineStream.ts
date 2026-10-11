@@ -1,64 +1,63 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TaskResult } from './types';
-import { getActiveProvider } from './storage';
-import { api } from './api';
+import { getToken, getActiveProvider } from './storage';
 
 /**
- * Starts a persistent backend run and polls its MongoDB-backed state.
+ * Server-side engine controller. [start] POSTs to the backend to begin a run,
+ * then subscribes to the SSE stream for progress. Progress + final result are
+ * surfaced through [onEvent].
  */
 export function useEngineStream() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollInFlightRef = useRef(false);
-  const lastEventRef = useRef('');
+  const esRef = useRef<EventSource | null>(null);
   const onEventRef = useRef<((r: TaskResult) => void) | null>(null);
 
   const close = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = null;
+    esRef.current?.close();
+    esRef.current = null;
   };
 
-  const pollRun = async (provider: 'incoin' | 'pakkago') => {
-    if (pollInFlightRef.current) return;
-    pollInFlightRef.current = true;
-    try {
-      const state = await api.getEngineState(provider);
-      const currentLogs = state.logs || [];
-      setProgress(state.progress);
-      setStatus(state.status);
-      setLogs(currentLogs);
+  const openStream = (token: string) => {
+    close();
+    const es = new EventSource(`/api/incoin/stream?token=${encodeURIComponent(token)}`);
 
-      const terminal = ['completed', 'stopped', 'failed'].includes(state.runStatus || '');
-      const eventKey = JSON.stringify([
-        state.runStatus,
-        state.status,
-        state.progress,
-        currentLogs,
-      ]);
-      if (state.runStatus && (eventKey !== lastEventRef.current || terminal)) {
-        lastEventRef.current = eventKey;
-        onEventRef.current?.({
-          success: !!state.success,
-          message: state.status,
-          status: state.status,
-          logs: currentLogs,
-          processed: state.processed,
-          progress: state.progress,
-          processedTasks: state.processedTasks || [],
-          done: terminal,
-        });
+    es.addEventListener('progress', (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as TaskResult;
+        setProgress(data.progress);
+        setStatus(data.status || data.message);
+        setLogs(data.logs);
+        onEventRef.current?.({ ...data, done: false });
+      } catch {
+        /* ignore malformed event */
       }
+    });
 
-      if (terminal) {
+    es.addEventListener('done', (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as TaskResult;
+        setProgress(100);
+        setStatus(data.message);
+        setLogs(data.logs);
         setRunning(false);
+        onEventRef.current?.({ ...data, done: true });
+      } catch {
+        /* ignore */
+      } finally {
         close();
       }
-    } finally {
-      pollInFlightRef.current = false;
-    }
+    });
+
+    es.addEventListener('stopped', () => {
+      setRunning(false);
+      setStatus('Stopped.');
+      close();
+    });
+
+    esRef.current = es;
   };
 
   const start = async (
@@ -68,25 +67,28 @@ export function useEngineStream() {
     onEventRef.current = onEvent;
     setRunning(true);
     setProgress(0);
-    setStatus('Queuing run...');
+    setStatus('Initializing...');
     setLogs([]);
-    lastEventRef.current = '';
 
     try {
-      const result = await api.startEngine(input);
-      if (!result.success) {
+      const token = getToken();
+      const res = await fetch('/api/incoin/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+        body: JSON.stringify({ ...input, provider: getActiveProvider() || 'incoin' }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
         setRunning(false);
-        setStatus(result.error || 'Failed to start.');
-        return { success: false, error: result.error || 'Failed to start.' };
+        setStatus(data?.error || 'Failed to start.');
+        return { success: false, error: data?.error || 'Failed to start.' };
       }
-
-      const provider = getActiveProvider() || 'incoin';
-      close();
-      setStatus('Queued for processing. Runs are picked up by the scheduled worker.');
-      pollRef.current = setInterval(() => void pollRun(provider), 3000);
-      void pollRun(provider);
+      openStream(token || '');
       return { success: true };
-    } catch {
+    } catch (e) {
       setRunning(false);
       setStatus('Failed to start.');
       return { success: false, error: 'Failed to start.' };
@@ -94,8 +96,19 @@ export function useEngineStream() {
   };
 
   const stop = async () => {
-    const result = await api.stopEngine();
-    if (result.success) setStatus('Stopping...');
+    const token = getToken();
+    try {
+      await fetch('/api/incoin/stop', {
+        method: 'POST',
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+      setRunning(false);
+      setStatus('Stopping...');
+    } catch (e) {
+      console.error('Failed to stop:', e);
+    }
   };
 
   useEffect(() => close, []);
