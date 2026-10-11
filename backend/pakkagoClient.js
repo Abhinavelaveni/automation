@@ -124,7 +124,12 @@ async function fetchAppKeys() {
   }
 
   if (!resp.ok) {
-    throw new Error(`PakkaGo initialization request returned HTTP ${resp.status} from ${new URL(requestUrl).host}${APP_KEYS_PATH}.`);
+    const finalUrl = new URL(resp.url || requestUrl);
+    const responseDetail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 200);
+    const detail = responseDetail ? ` Response: ${responseDetail}` : '';
+    throw new Error(
+      `PakkaGo initialization request returned HTTP ${resp.status} from ${finalUrl.host}${finalUrl.pathname}.${detail}`,
+    );
   }
 
   let data;
