@@ -306,6 +306,12 @@ export const api = {
       const appKeys = provider === 'incoin'
         ? await incoinBrowser.fetchAppKeys()
         : null;
+      if (provider === 'incoin' && !appKeys) {
+        return {
+          success: false,
+          error: 'Could not retrieve Incoin initialization keys from your browser. Check your connection and try again.',
+        };
+      }
       return await request('/incoin/start', {
         method: 'POST',
         body: JSON.stringify({
