@@ -248,32 +248,26 @@ export const api = {
     try {
       const provider = input.provider || getActiveProvider() || 'incoin';
       if (provider === 'incoin') {
-        try {
-          const keys = await incoinBrowser.fetchAppKeys();
-          if (keys) {
-            const loginResult = await incoinBrowser.login({
-              appKey: keys.key,
-              appSecret: keys.secret,
-              username: input.username,
-              password: input.password,
-              captchaCode: input.captchaCode,
-              captchaToken: input.captchaToken,
-            });
-            if (!loginResult.success) {
-              return { success: false, error: loginResult.error || 'Login failed.' };
-            }
-            return await request<ConnectResult>('/incoin/connect', {
-              method: 'POST',
-              body: JSON.stringify({
-                username: input.username,
-                authToken: loginResult.token,
-                provider,
-              }),
-            });
-          }
-        } catch {
-          // Fall through to server-side login.
+        const keys = await incoinBrowser.fetchAppKeys();
+        const loginResult = await incoinBrowser.login({
+          appKey: keys.key,
+          appSecret: keys.secret,
+          username: input.username,
+          password: input.password,
+          captchaCode: input.captchaCode,
+          captchaToken: input.captchaToken,
+        });
+        if (!loginResult.success) {
+          return { success: false, error: loginResult.error || 'Login failed.' };
         }
+        return await request<ConnectResult>('/incoin/connect', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: input.username,
+            authToken: loginResult.token,
+            provider,
+          }),
+        });
       }
       return await request<ConnectResult>('/incoin/connect', {
         method: 'POST',
@@ -306,18 +300,12 @@ export const api = {
       const appKeys = provider === 'incoin'
         ? await incoinBrowser.fetchAppKeys()
         : null;
-      if (provider === 'incoin' && !appKeys) {
-        return {
-          success: false,
-          error: 'Could not retrieve Incoin initialization keys from your browser. Check your connection and try again.',
-        };
-      }
       return await request('/incoin/start', {
         method: 'POST',
         body: JSON.stringify({
           ...input,
           provider,
-          ...(appKeys ? { appKeys } : {}),
+          ...(appKeys && { appKeys }),
         }),
       });
     } catch (e) {

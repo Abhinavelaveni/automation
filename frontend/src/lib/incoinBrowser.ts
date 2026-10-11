@@ -94,21 +94,48 @@ export async function fetchCaptcha(): Promise<{ captchaToken: string; imageBase6
   return { captchaToken: token, imageBase64: await blobToBase64(blob) };
 }
 
-export async function fetchAppKeys(): Promise<{ key: string; secret: string } | null> {
+export async function fetchAppKeys(): Promise<{ key: string; secret: string }> {
+  let resp: Response;
   try {
-    const resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
+    resp = await fetch(`${BASE_URL}/anon/client/checkVersion`, {
       method: 'GET',
       headers: baseHeaders(),
       cache: 'no-store',
     });
-    const data = await resp.json();
-    if (data?.data?.clientKey && data?.data?.clientSecret) {
-      return { key: data.data.clientKey, secret: data.data.clientSecret };
-    }
   } catch {
-    return null;
+    throw new Error(
+      'Incoin initialization request could not reach api.incoinpay.net. Check your connection and browser cross-origin access.',
+    );
   }
-  return null;
+
+  const responseText = await resp.text();
+  const responseDetail = responseText.replace(/\s+/g, ' ').slice(0, 200);
+  if (!resp.ok) {
+    const detail = responseDetail ? ` Response: ${responseDetail}` : '';
+    throw new Error(
+      `Incoin initialization request returned HTTP ${resp.status} from api.incoinpay.net/anon/client/checkVersion.${detail}`,
+    );
+  }
+
+  let data: {
+    data?: { clientKey?: unknown; clientSecret?: unknown };
+    msg?: unknown;
+  };
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error('Incoin initialization returned an invalid response.');
+  }
+
+  if (typeof data?.data?.clientKey !== 'string' || typeof data?.data?.clientSecret !== 'string') {
+    throw new Error(
+      typeof data?.msg === 'string'
+        ? data.msg
+        : 'Incoin initialization response did not include service keys.',
+    );
+  }
+
+  return { key: data.data.clientKey, secret: data.data.clientSecret };
 }
 
 export async function login(input: {
