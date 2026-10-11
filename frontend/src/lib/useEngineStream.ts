@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TaskResult } from './types';
 import { getToken, getActiveProvider } from './storage';
+import { api } from './api';
+import { fetchAppKeys } from './incoinBrowser';
+import { BrowserGrabEngine } from './browserEngine';
 
 /**
- * Server-side engine controller. [start] POSTs to the backend to begin a run,
- * then subscribes to the SSE stream for progress. Progress + final result are
- * surfaced through [onEvent].
+ * Engine controller.
+ *  - Incoin: the grab loop runs in this browser (so Incoin sees the user's own
+ *    network). The backend only reserves the run and charges the credit.
+ *  - PakkaGo: unchanged — the backend runs the loop and streams progress (SSE).
+ * Progress + final result are surfaced through [onEvent].
  */
 export function useEngineStream() {
   const [running, setRunning] = useState(false);
@@ -13,6 +18,7 @@ export function useEngineStream() {
   const [status, setStatus] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const esRef = useRef<EventSource | null>(null);
+  const browserEngineRef = useRef<BrowserGrabEngine | null>(null);
   const onEventRef = useRef<((r: TaskResult) => void) | null>(null);
 
   const close = () => {
@@ -60,6 +66,64 @@ export function useEngineStream() {
     esRef.current = es;
   };
 
+  const startInBrowser = async (
+    input: { minAmount: number; maxAmount: number; targetCount: number; preferredToolName: string },
+  ): Promise<{ success: boolean; error?: string }> => {
+    const session = await api.incoinSession({ targetCount: input.targetCount });
+    if (!session.success || !session.token) {
+      setRunning(false);
+      setStatus(session.error || 'Failed to start.');
+      return { success: false, error: session.error || 'Failed to start.' };
+    }
+
+    let keys;
+    try {
+      keys = await fetchAppKeys();
+    } catch (e) {
+      await api.completeIncoinRun(0); // release the reserved run
+      const msg = e instanceof Error ? e.message : 'Could not reach Incoin.';
+      setRunning(false);
+      setStatus(msg);
+      return { success: false, error: msg };
+    }
+
+    const engine = new BrowserGrabEngine({
+      token: session.token,
+      keys,
+      minAmount: input.minAmount,
+      maxAmount: input.maxAmount,
+      targetCount: session.targetCount || input.targetCount,
+      preferredToolName: input.preferredToolName,
+      onEvent: (ev) => {
+        setProgress(ev.progress);
+        setStatus(ev.status || ev.message);
+        setLogs(ev.logs);
+        onEventRef.current?.({ ...ev, done: false });
+      },
+    });
+    browserEngineRef.current = engine;
+
+    void engine.run().then(async (result) => {
+      browserEngineRef.current = null;
+      await api.completeIncoinRun(result.processed); // charge credit before UI refresh
+      setProgress(100);
+      setStatus(result.message);
+      setLogs(result.logs);
+      setRunning(false);
+      onEventRef.current?.({
+        success: result.success,
+        message: result.message,
+        logs: result.logs,
+        processed: result.processed,
+        progress: 100,
+        processedTasks: result.processedTasks,
+        done: true,
+      });
+    });
+
+    return { success: true };
+  };
+
   const start = async (
     input: { minAmount: number; maxAmount: number; targetCount: number; preferredToolName: string },
     onEvent: (r: TaskResult) => void,
@@ -69,6 +133,10 @@ export function useEngineStream() {
     setProgress(0);
     setStatus('Initializing...');
     setLogs([]);
+
+    if ((getActiveProvider() || 'incoin') === 'incoin') {
+      return startInBrowser(input);
+    }
 
     try {
       const token = getToken();
@@ -96,6 +164,11 @@ export function useEngineStream() {
   };
 
   const stop = async () => {
+    if (browserEngineRef.current) {
+      browserEngineRef.current.stop();
+      setStatus('Stopping...');
+      return;
+    }
     const token = getToken();
     try {
       await fetch('/api/incoin/stop', {
@@ -111,7 +184,13 @@ export function useEngineStream() {
     }
   };
 
-  useEffect(() => close, []);
+  useEffect(
+    () => () => {
+      close();
+      browserEngineRef.current?.stop();
+    },
+    [],
+  );
 
   return { running, progress, status, logs, start, stop };
 }

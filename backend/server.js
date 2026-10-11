@@ -909,6 +909,82 @@ app.post('/api/incoin/start', authMiddleware, async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────
+// Browser-run engine (Incoin). The grab loop runs in the user's browser so
+// Incoin sees the user's own network instead of this server's datacenter IP.
+// The server still enforces credits / task limits: it reserves the run here,
+// and charges the credit + writes the log in /api/incoin/complete.
+// ──────────────────────────────────────────────────────────────
+const BROWSER_RUN_TTL_MS = 15 * 60 * 1000;
+
+app.post('/api/incoin/session', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const ws = workspace.readWorkspace(user, 'incoin');
+    if (!ws.connected) {
+      return res.json({ success: false, error: 'Please connect your service workspace first.' });
+    }
+    if ((user.credits || 0) <= 0) {
+      return res.json({ success: false, error: 'Insufficient tool credits to continue.' });
+    }
+
+    const slot = getSlot(req.userId);
+    // A browser run that was never completed (tab closed) expires on its own.
+    if (slot.running && slot.browserRun && Date.now() - slot.browserRun.startedAt > BROWSER_RUN_TTL_MS) {
+      slot.running = false;
+      slot.browserRun = null;
+    }
+    if (slot.running) {
+      return res.json({ success: false, error: 'A run is already in progress.' });
+    }
+
+    const token = decryptToken(ws.iv, ws.tag, ws.token);
+    if (!token) {
+      return res.json({ success: false, error: 'Stored session is invalid. Please reconnect.' });
+    }
+
+    const taskLimit = user.taskLimit || DEFAULT_TASK_LIMIT;
+    const tasksPerRun = Math.min(Math.max(1, user.tasksPerRun || 3), taskLimit);
+    const targetCount = resolveTaskLimit(req.body?.targetCount || tasksPerRun, taskLimit);
+
+    slot.running = true;
+    slot.browserRun = { startedAt: Date.now(), targetCount };
+    slot.progress = 0;
+    slot.status = 'Initializing...';
+    slot.processed = 0;
+    slot.buffer = [];
+
+    res.json({ success: true, token, targetCount });
+  } catch (err) {
+    return serverError(res, err);
+  }
+});
+
+app.post('/api/incoin/complete', authMiddleware, async (req, res) => {
+  try {
+    const slot = getSlot(req.userId);
+    const run = slot.browserRun;
+    if (!run) return res.json({ success: false, error: 'No active run.' });
+
+    // One-shot: clear the reservation first so a run can only be charged once.
+    slot.browserRun = null;
+    slot.running = false;
+
+    const processed = Math.max(0, Math.min(Math.floor(Number(req.body?.processed) || 0), run.targetCount));
+    if (processed > 0) {
+      const user = await User.findById(req.userId);
+      if (user && (user.credits || 0) > 0) {
+        await User.findByIdAndUpdate(req.userId, { $inc: { credits: -1 } });
+        await Log.create({ userId: req.userId, ordersCount: processed, creditsUsed: 1 });
+      }
+    }
+    res.json({ success: true, processed });
+  } catch (err) {
+    return serverError(res, err);
+  }
+});
+
 // Request a stop of the current run.
 app.post('/api/incoin/stop', authMiddleware, async (req, res) => {
   const slot = getSlot(req.userId);

@@ -329,12 +329,9 @@ function isRouteError(res) {
   if (!res) return false;
   const code = String(res.code || '');
   const msg = String(res.msg || '');
-  return (
-    code === '404' ||
-    code === '405' ||
-    /method is not supported/i.test(msg) ||
-    /not found/i.test(msg)
-  );
+  // Only genuine routing failures. A business message such as "order not found"
+  // must NOT trigger endpoint re-discovery.
+  return code === '404' || code === '405' || /method is not supported/i.test(msg);
 }
 
 async function discoverGrabDate() {

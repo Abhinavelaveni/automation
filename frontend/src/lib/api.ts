@@ -312,6 +312,32 @@ export const api = {
     }
   },
 
+  // Browser-run engine: the server only reserves a run (credit/limit checks)
+  // and hands back the session token; the grab loop runs in this browser.
+  async incoinSession(input: {
+    targetCount: number;
+  }): Promise<{ success: boolean; token?: string; targetCount?: number; error?: string }> {
+    try {
+      return await request('/incoin/session', {
+        method: 'POST',
+        body: JSON.stringify({ ...input, provider: 'incoin' }),
+      });
+    } catch (e) {
+      return { success: false, error: friendlyError(e) };
+    }
+  },
+
+  async completeIncoinRun(processed: number): Promise<void> {
+    try {
+      await request('/incoin/complete', {
+        method: 'POST',
+        body: JSON.stringify({ processed, provider: 'incoin' }),
+      });
+    } catch (e) {
+      console.error('Failed to finalize run:', e);
+    }
+  },
+
   async stopEngine(): Promise<{ success: boolean }> {
     try {
       return await request('/incoin/stop', { method: 'POST' });

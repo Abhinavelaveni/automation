@@ -228,3 +228,193 @@ export async function login(input: {
     return { success: false, error: 'Could not complete Incoin login from this browser.' };
   }
 }
+
+// ──────────────────────────────────────────────────────────────
+// Signed API calls (task list / grab / review) — run from the browser
+// so Incoin sees the user's own network, exactly like the working site.
+// ──────────────────────────────────────────────────────────────
+export interface AppKeys {
+  key: string;
+  secret: string;
+}
+
+export interface ApiResponse {
+  code?: number | string;
+  msg?: string;
+  message?: string;
+  data?: any;
+  httpStatus?: number;
+  [k: string]: unknown;
+}
+
+const TIMEOUT_MS = 10000;
+
+export function isSuccess(res: ApiResponse | null | undefined): boolean {
+  if (!res || typeof res !== 'object') return false;
+  return res.code === 0 || res.code === '0' || res.code === '000000';
+}
+
+async function apiRequest(
+  endpoint: string,
+  bodyParams: Record<string, unknown>,
+  keys: AppKeys,
+  token: string,
+  method: 'GET' | 'POST' = 'POST',
+): Promise<ApiResponse> {
+  const headerParams: Record<string, string> = {
+    timestamp: String(Date.now()),
+    version: APP_VERSION,
+    OSVersion: OS_VERSION,
+    clientKey: keys.key,
+    clientType: CLIENT_TYPE,
+  };
+  if (token) headerParams.token = token;
+
+  const sign = await generateSign(bodyParams, headerParams, keys.secret);
+  const headers: Record<string, string> = {
+    ...headerParams,
+    appId: APP_ID,
+    language: LANGUAGE,
+    gaid: GAID,
+    androidId: ANDROID_ID,
+    sign,
+    'Content-Type': 'application/json',
+  };
+
+  let url = endpointUrl(endpoint);
+  const init: RequestInit = { method, headers, cache: 'no-store', signal: AbortSignal.timeout(TIMEOUT_MS) };
+  if (method === 'GET') {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(bodyParams)) qs.append(k, String(v));
+    if (qs.toString()) url += `?${qs.toString()}`;
+  } else {
+    init.body = JSON.stringify(bodyParams);
+  }
+
+  try {
+    const resp = await fetch(url, init);
+    const text = await resp.text();
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object'
+        ? { ...parsed, httpStatus: resp.status }
+        : { code: -1, msg: text, httpStatus: resp.status };
+    } catch {
+      return { code: -1, msg: text || `HTTP ${resp.status}`, httpStatus: resp.status };
+    }
+  } catch (err) {
+    return { code: -1, msg: `Network/Http Error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+export interface PaymentTool {
+  toolName?: string;
+  toolType?: unknown;
+  upiAddr?: string | null;
+  account?: string | null;
+  toolAccount?: string | null;
+  [k: string]: unknown;
+}
+
+export async function selectPaymentTool(input: {
+  keys: AppKeys;
+  token: string;
+  preferredToolName?: string;
+}): Promise<{ tool: PaymentTool | null; error: string | null }> {
+  const res = await apiRequest('/api/tool/mylist', {}, input.keys, input.token, 'GET');
+  if (!isSuccess(res)) {
+    return { tool: null, error: res?.msg || 'Failed to fetch payment tools.' };
+  }
+  const tools: PaymentTool[] = Array.isArray(res.data) ? res.data : [];
+  if (tools.length === 0) return { tool: null, error: 'No payment tools found on account.' };
+
+  const norm = (s: unknown) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const preferred = input.preferredToolName;
+  if (preferred && preferred.toLowerCase() !== 'any') {
+    const hit = tools.find((t) => norm(t.toolName).includes(norm(preferred)));
+    if (hit) return { tool: hit, error: null };
+  }
+  const fc = tools.find((t) => norm(t.toolName) === 'freecharge');
+  return { tool: fc || tools[0], error: null };
+}
+
+// The grab-list / grab endpoints may carry a rotating date suffix. Default is
+// the plain path (what the live site calls); the suffix is only used if the
+// API stops resolving the plain path and the Swagger docs advertise one.
+let cachedGrabDate: string = import.meta.env.VITE_INCOIN_GRAB_DATE || '';
+
+const grabListPath = () => (cachedGrabDate ? `/api/order/grablist${cachedGrabDate}` : '/api/order/grablist');
+const grabPath = () => (cachedGrabDate ? `/api/order/grab${cachedGrabDate}` : '/api/order/grab');
+
+function isRouteError(res: ApiResponse | null | undefined): boolean {
+  if (!res) return false;
+  if (res.httpStatus === 404 || res.httpStatus === 405) return true;
+  const code = String(res.code ?? '');
+  return code === '404' || code === '405' || /method is not supported/i.test(String(res.msg ?? ''));
+}
+
+// Returns true only if the cached date actually changed (so we never retry
+// the same dead path, and a business "not found" can't cause a loop).
+async function discoverGrabDate(): Promise<boolean> {
+  try {
+    const resp = await fetch(endpointUrl('/v2/api-docs'), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const docs = await resp.json();
+    for (const p of Object.keys(docs?.paths || {})) {
+      const m = p.match(/\/api\/order\/(?:grablist|grab)(\d{8})$/);
+      if (m && m[1] !== cachedGrabDate) {
+        cachedGrabDate = m[1];
+        console.warn(`[incoin] Grab endpoints now use date ${cachedGrabDate}`);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('[incoin] Could not discover grab endpoints:', err);
+  }
+  return false;
+}
+
+function extractTaskRecords(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data.records)) return data.records;
+  if (Array.isArray(data.list)) return data.list;
+  if (Array.isArray(data.tasks)) return data.tasks;
+  return [];
+}
+
+export async function fetchTaskList(input: {
+  keys: AppKeys;
+  token: string;
+}): Promise<{ tasks: any[]; error: string | null; authExpired?: boolean }> {
+  const body = { page: 1, size: 50, data: {} };
+  let res = await apiRequest(grabListPath(), body, input.keys, input.token, 'POST');
+  if (isRouteError(res) && (await discoverGrabDate())) {
+    res = await apiRequest(grabListPath(), body, input.keys, input.token, 'POST');
+  }
+  if (res.httpStatus === 401 || String(res.code) === '401') {
+    return { tasks: [], error: res.msg || 'Session expired', authExpired: true };
+  }
+  if (!isSuccess(res)) return { tasks: [], error: res.msg || JSON.stringify(res) };
+  return { tasks: extractTaskRecords(res.data), error: null };
+}
+
+export async function initializeTask(input: {
+  taskId: unknown;
+  tool: PaymentTool;
+  keys: AppKeys;
+  token: string;
+}): Promise<ApiResponse> {
+  const t = input.tool;
+  const upi = t.upiAddr ?? t.account ?? t.toolAccount;
+  const body = { orderId: input.taskId, toolType: t.toolType, upiAddr: upi };
+
+  let res = await apiRequest(grabPath(), body, input.keys, input.token, 'POST');
+  if (isRouteError(res) && (await discoverGrabDate())) {
+    res = await apiRequest(grabPath(), body, input.keys, input.token, 'POST');
+  }
+  return res;
+}
+
+export function verifyTask(input: { taskId: unknown; keys: AppKeys; token: string }): Promise<ApiResponse> {
+  return apiRequest('/api/order/machine/review', { orderId: input.taskId }, input.keys, input.token, 'POST');
+}
