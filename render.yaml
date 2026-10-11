@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: free
     branch: main
-    buildCommand: npm install && npm run render-build
+    buildCommand: npm ci --include=dev && npm run render-build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
