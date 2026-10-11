@@ -4,16 +4,18 @@ import DisableDevtool from 'disable-devtool';
 import App from './App';
 import './styles/global.css';
 
-DisableDevtool({
-  disableMenu: true,
-  disableSelect: false,
-  disableCopy: false,
-  disableCut: false,
-  disablePaste: false,
-  interval: 300,
-  url: 'about:blank',
-  timeOutUrl: 'about:blank',
-});
+if (import.meta.env.VITE_ENABLE_DEVTOOL !== 'false') {
+  DisableDevtool({
+    disableMenu: true,
+    disableSelect: false,
+    disableCopy: false,
+    disableCut: false,
+    disablePaste: false,
+    interval: 300,
+    url: 'about:blank',
+    timeOutUrl: 'about:blank',
+  });
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

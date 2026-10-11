@@ -17,3 +17,5 @@ services:
         generateValue: true
       - key: INCOIN_BASE_URL
         value: "https://api.incoinpay.net"
+      - key: VITE_ENABLE_DEVTOOL
+        value: "true"
