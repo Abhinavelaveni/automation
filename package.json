@@ -1,0 +1,10 @@
+{
+  "name": "incoin-auto",
+  "version": "1.0.0",
+  "description": "Incoin Auto Tool - full-stack app (React frontend + Express/Mongo backend)",
+  "private": true,
+  "scripts": {
+    "build": "npm install --prefix frontend && npm run --prefix frontend build && npm install --prefix backend --omit=dev",
+    "start": "node backend/server.js"
+  }
+}
