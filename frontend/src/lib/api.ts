@@ -290,7 +290,14 @@ export const api = {
       const qs = p ? `?provider=${encodeURIComponent(p)}` : '';
       return await request<EngineState>(`/incoin/state${qs}`);
     } catch {
-      return { connected: false, running: false, progress: 0, status: '', processed: 0 };
+      return {
+        connected: false,
+        running: false,
+        progress: 0,
+        status: '',
+        processed: 0,
+        runStatus: null,
+      };
     }
   },
 

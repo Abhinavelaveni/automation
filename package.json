@@ -9,7 +9,6 @@
   ],
   "scripts": {
     "build": "npm run build --workspace frontend",
-    "render-build": "npm run build",
     "start": "node backend/server.js",
     "dev": "npm run dev --workspace frontend"
   },

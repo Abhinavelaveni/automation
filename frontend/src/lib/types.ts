@@ -75,6 +75,10 @@ export interface EngineState {
   progress: number;
   status: string;
   processed: number;
+  logs?: string[];
+  runStatus?: 'queued' | 'running' | 'stopping' | 'completed' | 'stopped' | 'failed' | null;
+  success?: boolean;
+  processedTasks?: { taskId: string }[];
   taskLimit?: number;
   tasksPerRun?: number;
   services?: ServiceSummary[];

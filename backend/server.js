@@ -51,20 +51,9 @@ app.use((req, res, next) => {
   next();
 });
 
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    cb(null, uniqueName);
-  },
-});
 const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype || !file.mimetype.startsWith('image/')) {
       return cb(new Error('Only image files are allowed'));
@@ -129,10 +118,42 @@ const deviceSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
+const referralUploadSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  contentType: { type: String, required: true },
+  data: { type: Buffer, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+const engineRunSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  provider: { type: String, enum: ['incoin', 'pakkago'], required: true },
+  params: { type: mongoose.Schema.Types.Mixed, required: true },
+  state: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+  status: { type: String, default: 'queued' },
+  active: { type: Boolean, default: true },
+  stopRequested: { type: Boolean, default: false },
+  progress: { type: Number, default: 0 },
+  processed: { type: Number, default: 0 },
+  logs: { type: [String], default: [] },
+  processedTasks: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  success: { type: Boolean, default: false },
+  message: { type: String, default: 'Queued for processing.' },
+  lockedUntil: { type: Date, default: null },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+engineRunSchema.index(
+  { userId: 1 },
+  { unique: true, partialFilterExpression: { active: true } },
+);
+
 const User = mongoose.model('User', userSchema);
 const Log = mongoose.model('TaskLog', logSchema, 'tasklogs');
 const Referral = mongoose.model('Referral', referralSchema);
 const Device = mongoose.model('Device', deviceSchema);
+const ReferralUpload = mongoose.model('ReferralUpload', referralUploadSchema);
+const EngineRun = mongoose.model('EngineRun', engineRunSchema);
 
 async function verifyUserPassword(user, password) {
   const hash = user.passwordHash || user.password;
@@ -232,54 +253,19 @@ function decryptToken(ivB64, tagB64, dataB64) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Grab-engine slot management (per user, in memory)
-// ──────────────────────────────────────────────────────────────
-const engineSlots = new Map();
-
-function getSlot(userId) {
-  let slot = engineSlots.get(userId);
-  if (!slot) {
-    slot = {
-      engine: null,
-      buffer: [],
-      listeners: new Set(),
-      running: false,
-      progress: 0,
-      status: '',
-      processed: 0,
-    };
-    engineSlots.set(userId, slot);
-  }
-  return slot;
-}
-
-function emitToSlot(slot, event) {
-  slot.buffer.push(event);
-  if (slot.buffer.length > 500) slot.buffer.shift();
-  slot.progress = event.progress;
-  slot.status = event.status || event.message;
-  slot.processed = event.processed;
-  const payload = JSON.stringify(event);
-  for (const res of [...slot.listeners]) {
-    try {
-      res.write(`event: progress\ndata: ${payload}\n\n`);
-    } catch (err) {
-      slot.listeners.delete(res);
-    }
-  }
-}
-
-// ──────────────────────────────────────────────────────────────
 // Core API
 // ──────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
+function healthHandler(req, res) {
   const dbState = mongoose.connection.readyState;
   const dbOk = dbState === 1;
   res.status(dbOk ? 200 : 503).json({
     ok: dbOk,
     db: dbOk ? 'connected' : dbState === 2 ? 'connecting' : 'disconnected',
   });
-});
+}
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 function requireDb(req, res, next) {
   if (mongoose.connection.readyState !== 1) {
@@ -525,19 +511,29 @@ app.post('/api/referrals/apply', authMiddleware, async (req, res) => {
 app.post('/api/uploads/referral', authMiddleware, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const storedFile = await ReferralUpload.create({
+      userId: req.userId,
+      contentType: req.file.mimetype,
+      data: req.file.buffer,
+    });
+    const fileUrl = `/api/uploads/${storedFile.id}`;
     res.json({ url: fileUrl });
   } catch (err) {
     return serverError(res, err);
   }
 });
 
-app.get('/uploads/:filename', (req, res) => {
-  const safeName = path.basename(String(req.params.filename || ''));
-  if (!safeName || safeName !== req.params.filename) return res.status(400).send('Invalid filename');
-  const filePath = path.join(uploadDir, safeName);
-  if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
-  res.sendFile(filePath);
+app.get('/api/uploads/:fileId', async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.fileId)) return res.status(404).end();
+  try {
+    const file = await ReferralUpload.findById(req.params.fileId).select('contentType data');
+    if (!file) return res.status(404).end();
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(file.data);
+  } catch (err) {
+    return serverError(res, err);
+  }
 });
 
 app.get('/api/devices/registered/:deviceId', async (req, res) => {
@@ -761,9 +757,12 @@ app.post('/api/incoin/disconnect', authMiddleware, async (req, res) => {
 app.get('/api/incoin/state', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
-    const slot = getSlot(req.userId);
     const provider = user ? resolveRequestProvider(req, user) : 'incoin';
     const ws = user ? workspace.readWorkspace(user, provider) : { connected: false };
+    const run = await EngineRun.findOne({ userId: req.userId, active: true })
+      .sort({ createdAt: -1 })
+      .lean()
+      || await EngineRun.findOne({ userId: req.userId }).sort({ createdAt: -1 }).lean();
     res.json({
       provider,
       activeProvider: user?.activeProvider || null,
@@ -771,10 +770,14 @@ app.get('/api/incoin/state', authMiddleware, async (req, res) => {
       username: ws.username || undefined,
       phone: ws.phone || undefined,
       accountLocked: ws.locked || false,
-      running: slot.running,
-      progress: slot.progress,
-      status: slot.status,
-      processed: slot.processed,
+      running: !!run?.active,
+      progress: run?.progress || 0,
+      status: run?.message || '',
+      processed: run?.processed || 0,
+      logs: run?.logs || [],
+      runStatus: run?.status || null,
+      success: !!run?.success,
+      processedTasks: run?.processedTasks || [],
       taskLimit: user?.taskLimit || DEFAULT_TASK_LIMIT,
       tasksPerRun: Math.min(Math.max(1, user?.tasksPerRun || 3), user?.taskLimit || DEFAULT_TASK_LIMIT),
       services: user ? workspace.summarizeServices(user) : [],
@@ -784,7 +787,7 @@ app.get('/api/incoin/state', authMiddleware, async (req, res) => {
   }
 });
 
-// Start a processing run in the background.
+// Queue a processing run for the scheduled Vercel worker.
 app.post('/api/incoin/start', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -798,13 +801,11 @@ app.post('/api/incoin/start', authMiddleware, async (req, res) => {
       return res.json({ success: false, error: 'Insufficient tool credits to continue.' });
     }
 
-    const slot = getSlot(req.userId);
-    if (slot.running) {
+    if (await EngineRun.exists({ userId: req.userId, active: true })) {
       return res.json({ success: false, error: 'A run is already in progress.' });
     }
 
-    const token = decryptToken(ws.iv, ws.tag, ws.token);
-    if (!token) {
+    if (!decryptToken(ws.iv, ws.tag, ws.token)) {
       return res.json({ success: false, error: 'Stored session is invalid. Please reconnect.' });
     }
 
@@ -817,98 +818,200 @@ app.post('/api/incoin/start', authMiddleware, async (req, res) => {
     const tasksPerRun = Math.min(Math.max(1, user.tasksPerRun || 3), taskLimit);
     const effectiveTargetCount = resolveTaskLimit(targetCount || tasksPerRun, taskLimit);
 
-    const engine = new GrabEngine({
-      username: ws.username,
-      token,
-      minAmount: Number(minAmount) || 100,
-      maxAmount: Number(maxAmount) || 0,
-      targetCount: effectiveTargetCount,
-      preferredToolName,
+    const run = await EngineRun.create({
+      userId: req.userId,
       provider,
-      onEvent: (ev) => emitToSlot(slot, ev),
+      params: {
+        username: ws.username,
+        minAmount: Number(minAmount) || 100,
+        maxAmount: Number(maxAmount) || 0,
+        targetCount: effectiveTargetCount,
+        preferredToolName,
+      },
     });
-
-    slot.engine = engine;
-    slot.running = true;
-    slot.progress = 0;
-    slot.status = 'Initializing...';
-    slot.processed = 0;
-    slot.buffer = [];
-
-    res.json({ success: true, taskLimit: effectiveTargetCount });
-
-    (async () => {
-      try {
-        const result = await engine.run();
-        slot.running = false;
-
-        if (result.processed > 0 && (user.credits || 0) > 0) {
-          await User.findByIdAndUpdate(req.userId, { $inc: { credits: -1 } });
-          await Log.create({
-            userId: req.userId,
-            ordersCount: result.processed,
-            creditsUsed: 1,
-          });
-        }
-
-        const eventName = engine.stopped ? 'stopped' : 'done';
-        const payload = {
-          success: result.success,
-          message: result.message,
-          logs: result.logs,
-          processed: result.processed,
-          progress: 100,
-          processedTasks: result.processedTasks || [],
-        };
-
-        for (const res of [...slot.listeners]) {
-          try {
-            res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
-            res.end();
-          } catch (err) {
-            /* connection already closed */
-          }
-        }
-        slot.listeners.clear();
-        slot.engine = null;
-      } catch (err) {
-        slot.running = false;
-        slot.engine = null;
-      }
-    })();
+    res.json({ success: true, runId: run.id, taskLimit: effectiveTargetCount });
   } catch (err) {
+    if (err.code === 11000) {
+      return res.json({ success: false, error: 'A run is already in progress.' });
+    }
     return serverError(res, err);
   }
 });
 
 // Request a stop of the current run.
 app.post('/api/incoin/stop', authMiddleware, async (req, res) => {
-  const slot = getSlot(req.userId);
-  if (slot.engine) slot.engine.stop();
-  res.json({ success: true });
+  try {
+    await EngineRun.updateOne(
+      { userId: req.userId, active: true },
+      { $set: { stopRequested: true, status: 'stopping', message: 'Stopping...' } },
+    );
+    res.json({ success: true });
+  } catch (err) {
+    return serverError(res, err);
+  }
 });
 
-// Server-Sent Events stream for live progress.
-app.get('/api/incoin/stream', authMiddleware, (req, res) => {
-  const slot = getSlot(req.userId);
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  // Replay buffered progress events first.
-  for (const ev of slot.buffer) {
-    res.write(`event: progress\ndata: ${JSON.stringify(ev)}\n\n`);
+app.get('/api/internal/worker', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return res.status(503).json({ error: 'CRON_SECRET is not configured.' });
+  }
+  if (req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  if (!slot.running) {
-    res.write(`event: stopped\ndata: {}\n\n`);
-    return res.end();
-  }
+  try {
+    const now = new Date();
+    const run = await EngineRun.findOneAndUpdate(
+      {
+        active: true,
+        $or: [{ lockedUntil: null }, { lockedUntil: { $lte: now } }],
+      },
+      {
+        $set: {
+          lockedUntil: new Date(now.getTime() + 90000),
+          status: 'running',
+          message: 'Processing...',
+          updatedAt: now,
+        },
+      },
+      { sort: { createdAt: 1 }, new: true },
+    );
+    if (!run) return res.json({ success: true, processed: 0 });
 
-  slot.listeners.add(res);
-  req.on('close', () => slot.listeners.delete(res));
+    const finalizeRun = async (status, message, result = {}) => {
+      const finalRun = await EngineRun.findOneAndUpdate(
+        { _id: run._id, active: true },
+        {
+          $set: {
+            ...result,
+            status,
+            message,
+            active: false,
+            lockedUntil: null,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true },
+      );
+      if (finalRun?.processed > 0) {
+        const debit = await User.updateOne(
+          { _id: finalRun.userId, credits: { $gt: 0 } },
+          { $inc: { credits: -1 } },
+        );
+        if (debit.modifiedCount > 0) {
+          await Log.create({
+            userId: finalRun.userId,
+            ordersCount: finalRun.processed,
+            creditsUsed: 1,
+          });
+        }
+      }
+      return finalRun;
+    };
+
+    if (run.stopRequested) {
+      const tasks = run.state?.processedJobs || [];
+      await finalizeRun('stopped', 'Stopped by user.', {
+        success: tasks.length > 0,
+        processed: tasks.length,
+        processedTasks: tasks.map((task) => ({ taskId: task.id })),
+        progress: 100,
+      });
+      return res.json({ success: true, processed: tasks.length });
+    }
+
+    const user = await User.findById(run.userId);
+    if (!user) {
+      await finalizeRun('failed', 'User not found.');
+      return res.json({ success: false, error: 'User not found.' });
+    }
+    const ws = workspace.readWorkspace(user, run.provider);
+    const token = decryptToken(ws.iv, ws.tag, ws.token);
+    if (!token) {
+      await finalizeRun('failed', 'Stored session is invalid. Please reconnect.');
+      return res.json({ success: false, error: 'Stored session is invalid.' });
+    }
+
+    const engine = new GrabEngine({
+      ...run.params,
+      token,
+      provider: run.provider,
+      resumeState: run.state,
+      sliceDurationMs: 25000,
+      onEvent: async (event) => {
+        const state = event.state || run.state;
+        const processedTasks = (state?.processedJobs || [])
+          .filter((task) => task.verified)
+          .map((task) => ({ taskId: task.id }));
+        await EngineRun.updateOne(
+          { _id: run._id, active: true, stopRequested: false },
+          {
+            $set: {
+              state,
+              logs: event.logs || [],
+              processed: processedTasks.length,
+              processedTasks,
+              progress: event.progress || 0,
+              status: 'running',
+              message: event.status || event.message,
+              updatedAt: new Date(),
+            },
+          },
+        );
+      },
+    });
+    const result = await engine.run();
+    const latestRun = await EngineRun.findById(run._id).select('stopRequested');
+    const processedTasks = result.processedTasks || [];
+    const state = result.state || run.state;
+    const logs = result.logs || [];
+    const progress = result.paused
+      ? Math.min(99, Math.round((result.processed / run.params.targetCount) * 100))
+      : 100;
+
+    if (latestRun?.stopRequested || result.stopped) {
+      await finalizeRun('stopped', 'Stopped by user.', {
+        state,
+        logs,
+        processed: result.processed,
+        processedTasks,
+        progress: 100,
+        success: result.success,
+      });
+    } else if (result.paused) {
+      await EngineRun.updateOne(
+        { _id: run._id, active: true },
+        {
+          $set: {
+            state,
+            logs,
+            processed: result.processed,
+            processedTasks,
+            progress,
+            status: 'queued',
+            message: result.message,
+            lockedUntil: null,
+            updatedAt: new Date(),
+          },
+        },
+      );
+    } else {
+      await finalizeRun(result.failed ? 'failed' : 'completed', result.message, {
+        state,
+        logs,
+        processed: result.processed,
+        processedTasks,
+        progress: 100,
+        success: result.success,
+      });
+    }
+
+    res.json({ success: true, runId: run.id, status: result.paused ? 'queued' : 'completed' });
+  } catch (err) {
+    console.error('Vercel worker failed:', err);
+    return serverError(res, err);
+  }
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -930,10 +1033,11 @@ async function connectMongo() {
   if (!uri) {
     throw new Error('MONGODB_URI is not set. Add your MongoDB connection string to .env');
   }
+  if (mongoose.connection.readyState === 1) return;
   await mongoose.connect(uri, {
     serverSelectionTimeoutMS: 15000,
-    maxPoolSize: 10,
-    minPoolSize: 1,
+    maxPoolSize: 5,
+    minPoolSize: 0,
     retryWrites: true,
   });
   console.log('Connected to MongoDB');
@@ -996,10 +1100,39 @@ app.use((err, req, res, next) => {
   return serverError(res, err);
 });
 
+let connectionPromise;
+let modelIndexesPromise;
+let migrationsPromise;
+
+async function ensureReady({ runMigrations = false } = {}) {
+  if (!connectionPromise) {
+    connectionPromise = connectMongo().catch((err) => {
+      connectionPromise = null;
+      throw err;
+    });
+  }
+  await connectionPromise;
+  if (!modelIndexesPromise) {
+    modelIndexesPromise = Promise.all([EngineRun.init(), ReferralUpload.init()]).catch((err) => {
+      modelIndexesPromise = null;
+      throw err;
+    });
+  }
+  await modelIndexesPromise;
+  if (runMigrations && !migrationsPromise) {
+    migrationsPromise = (async () => {
+      await unsetNullUniqueFields();
+      await migrateTaskLogs();
+    })().catch((err) => {
+      migrationsPromise = null;
+      throw err;
+    });
+  }
+  if (migrationsPromise) await migrationsPromise;
+}
+
 async function start() {
-  await connectMongo();
-  await unsetNullUniqueFields();
-  await migrateTaskLogs();
+  await ensureReady({ runMigrations: true });
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
@@ -1013,4 +1146,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, start, User, Log, Referral, Device };
+module.exports = { app, start, ensureReady, User, Log, Referral, Device, EngineRun, ReferralUpload };
