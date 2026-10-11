@@ -1,24 +1,27 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "frontend/dist",
-  "functions": {
-    "api/[...path].js": {
-      "maxDuration": 60
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "backend": {
+      "root": "backend",
+      "framework": "express"
     },
-    "api/internal/worker.js": {
-      "maxDuration": 60
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite"
     }
   },
-  "crons": [
-    {
-      "path": "/api/internal/worker",
-      "schedule": "* * * * *"
-    }
-  ],
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": {
+        "service": "frontend"
+      }
     }
   ]
 }
