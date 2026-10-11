@@ -301,9 +301,18 @@ export const api = {
     preferredToolName: string;
   }): Promise<{ success: boolean; runId?: string; taskLimit?: number; error?: string }> {
     try {
+      const provider = getActiveProvider() || 'incoin';
+      // Incoin's public edge may return a route-level 404 to server-origin requests.
+      const appKeys = provider === 'incoin'
+        ? await incoinBrowser.fetchAppKeys()
+        : null;
       return await request('/incoin/start', {
         method: 'POST',
-        body: JSON.stringify({ ...input, provider: getActiveProvider() || 'incoin' }),
+        body: JSON.stringify({
+          ...input,
+          provider,
+          ...(appKeys ? { appKeys } : {}),
+        }),
       });
     } catch (e) {
       return { success: false, error: friendlyError(e) };

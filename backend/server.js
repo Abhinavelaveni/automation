@@ -808,7 +808,20 @@ app.post('/api/incoin/start', authMiddleware, async (req, res) => {
       return res.json({ success: false, error: 'Stored session is invalid. Please reconnect.' });
     }
 
-    const { minAmount, maxAmount, targetCount, preferredToolName } = req.body;
+    const { minAmount, maxAmount, targetCount, preferredToolName, appKeys } = req.body;
+    if (
+      appKeys !== undefined
+      && (
+        typeof appKeys?.key !== 'string'
+        || typeof appKeys?.secret !== 'string'
+        || appKeys.key.length === 0
+        || appKeys.secret.length === 0
+        || appKeys.key.length > 256
+        || appKeys.secret.length > 256
+      )
+    ) {
+      return res.status(400).json({ error: 'Invalid service initialization keys.' });
+    }
 
     // Server-side task limit enforcement: use the user's tasksPerRun preference
     // (capped by their granted taskLimit). This cannot be bypassed by crafting
@@ -825,6 +838,7 @@ app.post('/api/incoin/start', authMiddleware, async (req, res) => {
       targetCount: effectiveTargetCount,
       preferredToolName,
       provider,
+      appKeys,
       onEvent: (ev) => emitToSlot(slot, ev),
     });
 

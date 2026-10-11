@@ -30,7 +30,7 @@ const humanDelay = {
  *   { success, message, status, logs, processed, progress, processedTasks }
  */
 class GrabEngine {
-  constructor({ username, token, minAmount, maxAmount, targetCount, preferredToolName, provider, onEvent }) {
+  constructor({ username, token, minAmount, maxAmount, targetCount, preferredToolName, provider, appKeys, onEvent }) {
     this.username = username;
     this.token = token;
     this.minAmount = minAmount;
@@ -38,6 +38,7 @@ class GrabEngine {
     this.targetCount = targetCount;
     this.preferredToolName = preferredToolName || 'Freecharge';
     this.provider = provider === 'pakkago' ? 'pakkago' : 'incoin';
+    this.appKeys = appKeys;
     this.client = resolveClient(this.provider);
     this.onEvent = onEvent || (() => {});
     this.stopRequested = false;
@@ -76,9 +77,9 @@ class GrabEngine {
       logs.push('Initializing engine...');
       this._emit({ success: false, message: 'Starting...', status: 'Starting...', logs: [...logs], processed: 0, progress: 5 });
 
-      let keys;
+      let keys = this.appKeys;
       try {
-        keys = await this.client.fetchAppKeys();
+        if (!keys) keys = await this.client.fetchAppKeys();
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Service initialization failed.';
         logs.push(message);
