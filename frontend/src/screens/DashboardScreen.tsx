@@ -76,7 +76,7 @@ export default function DashboardScreen() {
     minComplexity: 100,
     maxComplexity: 0,
     targetCount: taskLimit,
-    preferredToolName: 'AmazonPay',
+    preferredToolName: 'Mobikwik',
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [result, setResult] = useState<TaskResult | null>(null);
